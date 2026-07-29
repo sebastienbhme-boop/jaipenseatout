@@ -40,5 +40,5 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-.vercel
-.env*
+# scripts d'import : caches locaux de fichiers open data volumineux
+/.cache/
