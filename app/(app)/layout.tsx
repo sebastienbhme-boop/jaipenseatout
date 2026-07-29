@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
+import { SignOutButton } from "./sign-out-button";
 
 const NAV_ITEMS = [
   { href: "/foyer", label: "Mon foyer" },
@@ -8,10 +11,19 @@ const NAV_ITEMS = [
   { href: "/carte", label: "Carte" },
 ];
 
-export default function AppLayout({ children }: { children: React.ReactNode }) {
+export default async function AppLayout({ children }: { children: React.ReactNode }) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect("/auth/login");
+  }
+
   return (
     <div className="flex min-h-screen flex-col">
-      <nav className="flex gap-6 border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
+      <nav className="flex items-center gap-6 border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
         <Link href="/" className="font-semibold">
           J&apos;ai Pensé à Tout
         </Link>
@@ -24,6 +36,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             {item.label}
           </Link>
         ))}
+        <SignOutButton />
       </nav>
       <main className="flex-1">{children}</main>
     </div>
