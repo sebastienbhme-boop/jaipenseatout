@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { href: "/fiches-reflexes", label: "Fiches réflexes" },
   { href: "/kit", label: "Kit de survie" },
   { href: "/carte", label: "Carte" },
+  { href: "/risques", label: "Comprendre les risques" },
 ];
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
