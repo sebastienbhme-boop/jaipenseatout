@@ -1,12 +1,36 @@
-export default function OnboardingPage() {
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
+import { OnboardingForm } from "./onboarding-form";
+
+export default async function OnboardingPage() {
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect("/auth/login");
+  }
+
+  const { data: household } = await supabase
+    .from("households")
+    .select("id")
+    .eq("owner_user_id", user.id)
+    .maybeSingle();
+
+  if (household) {
+    redirect("/foyer");
+  }
+
   return (
     <div className="mx-auto max-w-xl px-6 py-16">
-      <h1 className="text-2xl font-semibold mb-4">Bienvenue</h1>
-      <p className="text-zinc-600 dark:text-zinc-400">
-        Étape 1 : indiquez votre commune pour découvrir les risques qui vous
-        concernent, puis créez les profils des membres de votre foyer.
+      <h1 className="text-2xl font-semibold mb-2">Bienvenue</h1>
+      <p className="mb-8 text-zinc-600 dark:text-zinc-400">
+        Indiquez votre commune et les membres de votre foyer. Chacun aura son
+        propre profil, son kit et son PDF.
       </p>
-      {/* TODO: formulaire commune (autocomplete INSEE) + création du foyer + profils */}
+      <OnboardingForm />
     </div>
   );
 }
