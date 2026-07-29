@@ -15,7 +15,7 @@ export default async function FoyerPage() {
 
   const { data: household } = await supabase
     .from("households")
-    .select("*, profiles(*)")
+    .select("*, profiles(*), communes(name)")
     .eq("owner_user_id", user.id)
     .single();
 
@@ -27,12 +27,47 @@ export default async function FoyerPage() {
     (a, b) => Number(b.is_primary) - Number(a.is_primary)
   );
 
+  const { data: communeRisks } = household.insee_code
+    ? await supabase
+        .from("commune_risks")
+        .select("risk_type_code, risk_types(label, icon_name)")
+        .eq("insee_code", household.insee_code)
+    : { data: null };
+
   return (
     <div className="mx-auto max-w-xl px-6 py-16">
       <h1 className="text-2xl font-semibold mb-1">{household.name}</h1>
       <p className="mb-8 text-zinc-600 dark:text-zinc-400">
-        {profiles.length} membre{profiles.length > 1 ? "s" : ""} du foyer.
+        {profiles.length} membre{profiles.length > 1 ? "s" : ""} du foyer
+        {household.communes?.name && <> · {household.communes.name}</>}
       </p>
+
+      {communeRisks && communeRisks.length > 0 && (
+        <div className="mb-8">
+          <h2 className="mb-3 text-sm font-medium text-zinc-600 dark:text-zinc-400">
+            Risques identifiés pour votre commune
+          </h2>
+          <ul className="flex flex-wrap gap-2">
+            {communeRisks.map((cr) => {
+              const riskType = Array.isArray(cr.risk_types)
+                ? cr.risk_types[0]
+                : cr.risk_types;
+              return (
+                <li
+                  key={cr.risk_type_code}
+                  className="rounded-full border border-zinc-200 px-3 py-1 text-sm dark:border-zinc-800"
+                >
+                  {riskType?.label ?? cr.risk_type_code}
+                </li>
+              );
+            })}
+          </ul>
+          <p className="mt-3 text-xs text-zinc-500">
+            Source : Géorisques (DDRM). Cette liste est informative — suivez
+            toujours les consignes des autorités officielles.
+          </p>
+        </div>
+      )}
 
       <ul className="flex flex-col gap-3">
         {profiles.map((profile) => (
