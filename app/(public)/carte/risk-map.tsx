@@ -52,6 +52,18 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
   const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number } | null>(null);
   const [selectedRisk, setSelectedRisk] = useState<string | null>(null);
   const [popupCommune, setPopupCommune] = useState<CommuneArea | null>(null);
+  const [labelledRiskInfo, setLabelledRiskInfo] = useState<{ label: string; top: number } | null>(null);
+  const legendRef = useRef<HTMLDivElement>(null);
+  const labelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showRiskLabel = useCallback((label: string, buttonEl: HTMLElement) => {
+    const containerRect = legendRef.current?.getBoundingClientRect();
+    const buttonRect = buttonEl.getBoundingClientRect();
+    const top = containerRect ? buttonRect.top - containerRect.top : 0;
+    setLabelledRiskInfo({ label, top });
+    if (labelTimeoutRef.current) clearTimeout(labelTimeoutRef.current);
+    labelTimeoutRef.current = setTimeout(() => setLabelledRiskInfo(null), 2000);
+  }, []);
 
   useEffect(() => {
     if (!inseeCode) return;
@@ -296,17 +308,20 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
       </div>
 
       {availableRisks.length > 0 && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center p-4">
-          <div className="pointer-events-auto flex max-w-full flex-wrap justify-center gap-2 rounded-lg bg-white/95 p-2 shadow-md backdrop-blur dark:bg-zinc-900/95">
+        <div ref={legendRef} className="pointer-events-none absolute inset-y-0 right-0 z-10 flex items-center p-3">
+          <div className="pointer-events-auto flex max-h-full flex-col gap-1.5 overflow-y-auto rounded-xl bg-white/95 p-1.5 shadow-md backdrop-blur dark:bg-zinc-900/95">
             <button
               onClick={() => setSelectedRisk(null)}
-              className={`rounded-full border px-3 py-1.5 text-sm transition-colors ${
+              title="Tous les risques"
+              aria-label="Tous les risques"
+              aria-pressed={selectedRisk === null}
+              className={`flex h-8 w-8 items-center justify-center rounded-md border text-sm transition-colors ${
                 selectedRisk === null
                   ? "border-zinc-900 bg-zinc-900 text-white dark:border-white dark:bg-white dark:text-black"
                   : "border-zinc-300 text-zinc-600 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-400"
               }`}
             >
-              Tous les risques
+              ✳️
             </button>
             {availableRisks.map((r) => {
               const style = getRiskStyle(r.code);
@@ -314,20 +329,32 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
               return (
                 <button
                   key={r.code}
-                  onClick={() => setSelectedRisk(active ? null : r.code)}
-                  className="flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors"
+                  onClick={(e) => {
+                    setSelectedRisk(active ? null : r.code);
+                    showRiskLabel(r.label, e.currentTarget);
+                  }}
+                  aria-label={r.label}
+                  aria-pressed={active}
+                  className="flex h-8 w-8 items-center justify-center rounded-md border text-sm transition-colors"
                   style={{
                     borderColor: style.color,
                     backgroundColor: active ? style.color : "transparent",
-                    color: active ? "white" : style.color,
                   }}
                 >
-                  <span>{style.icon}</span>
-                  {r.label}
+                  {style.icon}
                 </button>
               );
             })}
           </div>
+
+          {labelledRiskInfo && (
+            <span
+              className="pointer-events-none absolute -translate-y-1/2 whitespace-nowrap rounded-md bg-white/95 px-2 py-1 text-xs font-medium text-zinc-800 shadow-md backdrop-blur dark:bg-zinc-900/95 dark:text-zinc-100"
+              style={{ right: "3.25rem", top: labelledRiskInfo.top + 16 }}
+            >
+              {labelledRiskInfo.label}
+            </span>
+          )}
         </div>
       )}
     </div>
