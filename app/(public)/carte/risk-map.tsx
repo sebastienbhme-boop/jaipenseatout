@@ -35,20 +35,21 @@ type CommuneArea = {
   risks: Risk[];
 };
 
-type BoundsResponse = {
-  communes: CommuneArea[];
-  truncated: boolean;
-};
-
 export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
   const mapRef = useRef<MapRef>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Cache des communes par département — un département chargé une fois
+  // n'est jamais retéléchargé, et surtout ne "disparaît" plus au fil des
+  // déplacements de la carte (contrairement à une requête par zone
+  // géographique bornée, sujette au clignotement quand une zone dense
+  // dépasse la limite de résultats).
+  const departementCacheRef = useRef<Map<string, CommuneArea[]>>(new Map());
+  const loadingDepartementsRef = useRef<Set<string>>(new Set());
 
   const [initialCenter, setInitialCenter] = useState<{ longitude: number; latitude: number } | null>(null);
   const [communes, setCommunes] = useState<CommuneArea[]>([]);
-  const [truncated, setTruncated] = useState(false);
   const [zoom, setZoom] = useState(FRANCE_ZOOM);
-  const [loading, setLoading] = useState(false);
+  const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number } | null>(null);
   const [selectedRisk, setSelectedRisk] = useState<string | null>(null);
   const [popupCommune, setPopupCommune] = useState<CommuneArea | null>(null);
 
@@ -64,7 +65,33 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
       .catch(() => {});
   }, [inseeCode]);
 
-  const fetchCommunes = useCallback(() => {
+  const refreshVisibleCommunes = useCallback(() => {
+    const cache = departementCacheRef.current;
+    const all = [...cache.values()].flat();
+    setCommunes(all);
+  }, []);
+
+  const loadDepartement = useCallback(
+    async (code: string) => {
+      if (departementCacheRef.current.has(code) || loadingDepartementsRef.current.has(code)) {
+        return;
+      }
+      loadingDepartementsRef.current.add(code);
+      try {
+        const res = await fetch(`/api/communes/departement/${code}`);
+        const data = await res.json();
+        departementCacheRef.current.set(code, data.communes ?? []);
+        refreshVisibleCommunes();
+      } catch {
+        // laisse la possibilité de retenter au prochain déplacement
+      } finally {
+        loadingDepartementsRef.current.delete(code);
+      }
+    },
+    [refreshVisibleCommunes]
+  );
+
+  const fetchDepartementsInBounds = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
     const bounds = map.getBounds();
@@ -74,16 +101,28 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
       east: String(bounds.getEast()),
       west: String(bounds.getWest()),
     });
-    setLoading(true);
-    fetch(`/api/communes/in-bounds?${params}`)
+
+    fetch(`/api/communes/departements-in-bounds?${params}`)
       .then((res) => res.json())
-      .then((data: BoundsResponse) => {
-        setCommunes(data.communes ?? []);
-        setTruncated(data.truncated ?? false);
+      .then(async (data: { departements: string[] }) => {
+        const departements = data.departements ?? [];
+        const toLoad = departements.filter((code) => !departementCacheRef.current.has(code));
+
+        if (toLoad.length === 0) return;
+
+        let loaded = 0;
+        setLoadProgress({ loaded: 0, total: toLoad.length });
+        await Promise.all(
+          toLoad.map(async (code) => {
+            await loadDepartement(code);
+            loaded += 1;
+            setLoadProgress({ loaded, total: toLoad.length });
+          })
+        );
       })
       .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+      .finally(() => setLoadProgress(null));
+  }, [loadDepartement]);
 
   const handleMoveEnd = useCallback(() => {
     const map = mapRef.current?.getMap();
@@ -91,8 +130,8 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
     setZoom(map.getZoom());
 
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(fetchCommunes, MOVE_DEBOUNCE_MS);
-  }, [fetchCommunes]);
+    timeoutRef.current = setTimeout(fetchDepartementsInBounds, MOVE_DEBOUNCE_MS);
+  }, [fetchDepartementsInBounds]);
 
   const availableRisks = useMemo(() => {
     const map = new Map<string, string>();
@@ -133,7 +172,7 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
         maxZoom={MAX_ZOOM}
         style={{ width: "100%", height: "100%" }}
         onLoad={(e) => {
-          fetchCommunes();
+          fetchDepartementsInBounds();
           setZoom(e.target.getZoom());
         }}
         onMoveEnd={handleMoveEnd}
@@ -232,11 +271,23 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
               Zoomez pour afficher le détail des risques par commune.
             </p>
           )}
-          {loading && <p className="mt-1 text-xs text-zinc-400">Chargement…</p>}
-          {truncated && (
-            <p className="mt-1 text-xs text-amber-600">
-              Trop de communes dans cette zone — zoomez pour tout afficher.
-            </p>
+          {loadProgress && (
+            <div className="mt-2">
+              <div className="flex items-center justify-between text-xs text-zinc-400">
+                <span>Chargement des risques…</span>
+                <span className="font-mono tabular-nums">
+                  {loadProgress.loaded}/{loadProgress.total}
+                </span>
+              </div>
+              <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
+                <div
+                  className="h-full rounded-full bg-zinc-900 transition-all duration-300 dark:bg-white"
+                  style={{
+                    width: `${(loadProgress.loaded / loadProgress.total) * 100}%`,
+                  }}
+                />
+              </div>
+            </div>
           )}
           <div className="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-700">
             <MeteoBanner />

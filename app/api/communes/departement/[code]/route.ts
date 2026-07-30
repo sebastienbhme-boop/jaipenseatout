@@ -1,39 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-const MAX_COMMUNES = 300;
-
-export async function GET(request: NextRequest) {
-  const params = request.nextUrl.searchParams;
-  const north = parseFloat(params.get("north") ?? "");
-  const south = parseFloat(params.get("south") ?? "");
-  const east = parseFloat(params.get("east") ?? "");
-  const west = parseFloat(params.get("west") ?? "");
-
-  if ([north, south, east, west].some(Number.isNaN)) {
-    return NextResponse.json({ error: "Bounding box requise (north, south, east, west)" }, { status: 400 });
-  }
-
+// Renvoie toutes les communes d'un département avec leurs risques.
+// Chargé une fois par département et mis en cache côté carte (voir
+// risk-map.tsx) — évite le clignotement causé par une limite de
+// résultats sur une zone géographique dense en communes.
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ code: string }> }
+) {
+  const { code } = await params;
   const supabase = await createClient();
 
   const { data: rawCommunes, error } = await supabase
     .from("communes")
     .select("insee_code, name, lat, lng, contour_simplifie")
-    .gte("lat", south)
-    .lte("lat", north)
-    .gte("lng", west)
-    .lte("lng", east)
+    .eq("departement_code", code)
     .not("lat", "is", null)
-    .not("lng", "is", null)
-    .limit(MAX_COMMUNES);
+    .not("lng", "is", null);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // Les communes sans contour disponible (fusionnées/disparues du
-  // référentiel geo.api.gouv.fr) sont marquées avec un contour sentinelle
-  // {"unavailable":true} par le script d'import — on ne l'envoie pas tel quel.
   const communes = (rawCommunes ?? []).map((c) => ({
     ...c,
     contour_simplifie:
@@ -67,6 +56,5 @@ export async function GET(request: NextRequest) {
       contour: c.contour_simplifie,
       risks: risksByCommune.get(c.insee_code) ?? [],
     })),
-    truncated: communes.length >= MAX_COMMUNES,
   });
 }
