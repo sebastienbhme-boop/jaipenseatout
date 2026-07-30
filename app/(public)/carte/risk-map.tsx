@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import MapGL, { Marker, Popup, type MapRef } from "react-map-gl/maplibre";
+import MapGL, { Marker, Popup, Source, Layer, type MapRef } from "react-map-gl/maplibre";
 import { setWorkerUrl } from "maplibre-gl";
+import type { Feature, FeatureCollection, Geometry } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { getRiskStyle } from "./risk-colors";
+import { MeteoBanner } from "../../meteo-banner";
 
 // Next.js réécrit import.meta.url d'une façon qui casse la résolution
 // automatique du worker MapLibre (il pointe vers l'URL de la page
@@ -29,6 +31,7 @@ type CommuneArea = {
   name: string;
   lat: number;
   lng: number;
+  contour: Geometry | null;
   risks: Risk[];
 };
 
@@ -103,6 +106,20 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
 
   const showIcons = zoom >= ICONS_MIN_ZOOM;
 
+  const selectedRiskGeoJson: FeatureCollection | null = useMemo(() => {
+    if (!selectedRisk) return null;
+    const features: Feature[] = communes
+      .filter((c) => c.contour && c.risks.some((r) => r.code === selectedRisk))
+      .map((c) => ({
+        type: "Feature",
+        geometry: c.contour as Geometry,
+        properties: { insee_code: c.insee_code },
+      }));
+    return { type: "FeatureCollection", features };
+  }, [communes, selectedRisk]);
+
+  const selectedStyle = selectedRisk ? getRiskStyle(selectedRisk) : null;
+
   return (
     <div className="relative h-full w-full">
       <MapGL
@@ -121,6 +138,21 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
         }}
         onMoveEnd={handleMoveEnd}
       >
+        {selectedRiskGeoJson && selectedStyle && (
+          <Source id="selected-risk" type="geojson" data={selectedRiskGeoJson}>
+            <Layer
+              id="selected-risk-fill"
+              type="fill"
+              paint={{ "fill-color": selectedStyle.color, "fill-opacity": 0.35 }}
+            />
+            <Layer
+              id="selected-risk-outline"
+              type="line"
+              paint={{ "line-color": selectedStyle.color, "line-width": 1.5 }}
+            />
+          </Source>
+        )}
+
         {showIcons &&
           communes.map((commune) => {
             const risksToShow = selectedRisk
@@ -206,6 +238,9 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
               Trop de communes dans cette zone — zoomez pour tout afficher.
             </p>
           )}
+          <div className="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-700">
+            <MeteoBanner />
+          </div>
         </div>
       </div>
 

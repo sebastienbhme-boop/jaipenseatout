@@ -16,9 +16,9 @@ export async function GET(request: NextRequest) {
 
   const supabase = await createClient();
 
-  const { data: communes, error } = await supabase
+  const { data: rawCommunes, error } = await supabase
     .from("communes")
-    .select("insee_code, name, lat, lng")
+    .select("insee_code, name, lat, lng, contour_simplifie")
     .gte("lat", south)
     .lte("lat", north)
     .gte("lng", west)
@@ -31,7 +31,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  const inseeCodes = (communes ?? []).map((c) => c.insee_code);
+  // Les communes sans contour disponible (fusionnées/disparues du
+  // référentiel geo.api.gouv.fr) sont marquées avec un contour sentinelle
+  // {"unavailable":true} par le script d'import — on ne l'envoie pas tel quel.
+  const communes = (rawCommunes ?? []).map((c) => ({
+    ...c,
+    contour_simplifie:
+      c.contour_simplifie && !(c.contour_simplifie as { unavailable?: boolean }).unavailable
+        ? c.contour_simplifie
+        : null,
+  }));
+
+  const inseeCodes = communes.map((c) => c.insee_code);
 
   const { data: risksData } = await supabase
     .from("commune_risks")
@@ -48,13 +59,14 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.json({
-    communes: (communes ?? []).map((c) => ({
+    communes: communes.map((c) => ({
       insee_code: c.insee_code,
       name: c.name,
       lat: c.lat,
       lng: c.lng,
+      contour: c.contour_simplifie,
       risks: risksByCommune.get(c.insee_code) ?? [],
     })),
-    truncated: (communes ?? []).length >= MAX_COMMUNES,
+    truncated: communes.length >= MAX_COMMUNES,
   });
 }
