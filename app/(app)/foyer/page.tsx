@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { MeteoBanner } from "../../meteo-banner";
 
 export default async function FoyerPage() {
   const supabase = await createClient();
@@ -68,6 +69,10 @@ export default async function FoyerPage() {
           </p>
         </div>
       )}
+
+      <div className="mb-8">
+        <MeteoBanner />
+      </div>
 
       <ul className="flex flex-col gap-3">
         {profiles.map((profile) => (

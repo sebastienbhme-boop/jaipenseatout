@@ -41,6 +41,12 @@ const RISK_TYPES = [
 
 const ROOT_TO_CODE = new Map(RISK_TYPES.map((r) => [r.gasparRoot, r.code]));
 
+// METEO concerne ~27% des communes françaises (8600+) sans être
+// discriminant — les intempéries touchent tout le territoire. On garde
+// le risque dans risk_types (visible sur /risques) mais on ne l'associe
+// à aucune commune : un bandeau générique renvoie vers Météo France.
+const EXCLUDED_FROM_COMMUNE_RISKS = new Set(["METEO"]);
+
 function riskRootFromNum(numRisque) {
   const trimmed = numRisque.trim();
   return trimmed === "AUTRE" ? "AUTRE" : trimmed.slice(0, 2);
@@ -93,6 +99,7 @@ function parseDdrmCsv(csvText) {
     const root = riskRootFromNum(numRisque);
     const riskTypeCode = ROOT_TO_CODE.get(root);
     if (!riskTypeCode) continue;
+    if (EXCLUDED_FROM_COMMUNE_RISKS.has(riskTypeCode)) continue;
 
     const key = `${inseeCode}|${riskTypeCode}`;
     if (seen.has(key)) continue;
