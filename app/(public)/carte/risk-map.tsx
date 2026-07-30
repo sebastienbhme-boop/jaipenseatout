@@ -1,32 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MapContainer, TileLayer, GeoJSON, Marker, Popup, useMap, useMapEvents } from "react-leaflet";
-import type { Feature, Geometry } from "geojson";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
+import MapGL, { Marker, Popup, type MapRef } from "react-map-gl/maplibre";
+import { setWorkerUrl } from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
 import { getRiskStyle } from "./risk-colors";
 
-const FRANCE_CENTER: [number, number] = [46.6, 2.5];
-const FRANCE_ZOOM = 6;
-const BORDER_COLOR = "#71717a";
-const CONTOURS_MIN_ZOOM = 9; // en dessous, trop de communes : on ne charge pas les contours (évite les gros payloads)
+// Next.js réécrit import.meta.url d'une façon qui casse la résolution
+// automatique du worker MapLibre (il pointe vers l'URL de la page
+// courante au lieu du fichier réel) — on fixe l'URL explicitement vers
+// une copie statique du worker dans /public.
+if (typeof window !== "undefined") {
+  setWorkerUrl("/maplibre-gl-worker.mjs");
+}
+
+const FRANCE_CENTER = { longitude: 2.5, latitude: 46.6 };
+const FRANCE_ZOOM = 5.5;
+const MAX_ZOOM = 13; // pas besoin de zoomer plus près, la carte reste informative à l'échelle communale
 const ICONS_MIN_ZOOM = 10; // en dessous, trop de communes affichées : les pictos surchargeraient la carte
 const MOVE_DEBOUNCE_MS = 400;
 
-function riskIcon(icon: string) {
-  return L.divIcon({
-    html: `<div style="
-      display:flex;align-items:center;justify-content:center;
-      width:26px;height:26px;border-radius:9999px;
-      background:white;font-size:14px;
-      border:1px solid #d4d4d8;box-shadow:0 1px 3px rgba(0,0,0,0.3);
-    ">${icon}</div>`,
-    className: "",
-    iconSize: [26, 26],
-    iconAnchor: [13, 13],
-  });
-}
+const BASE_STYLE = "https://openmaptiles.geo.data.gouv.fr/styles/osm-bright/style.json";
 
 type Risk = { code: string; label: string };
 
@@ -35,7 +29,6 @@ type CommuneArea = {
   name: string;
   lat: number;
   lng: number;
-  contour: Geometry | null;
   risks: Risk[];
 };
 
@@ -44,55 +37,17 @@ type BoundsResponse = {
   truncated: boolean;
 };
 
-type Bounds = { north: number; south: number; east: number; west: number };
-
-function BoundsWatcher({ onChange }: { onChange: (bounds: Bounds, zoom: number) => void }) {
+export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
+  const mapRef = useRef<MapRef>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const map = useMapEvents({
-    moveend: () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      timeoutRef.current = setTimeout(() => {
-        const b = map.getBounds();
-        onChange(
-          { north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() },
-          map.getZoom()
-        );
-      }, MOVE_DEBOUNCE_MS);
-    },
-  });
-
-  useEffect(() => {
-    const b = map.getBounds();
-    onChange(
-      { north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() },
-      map.getZoom()
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  return null;
-}
-
-function RecenterOnCenter({ center }: { center: [number, number] | null }) {
-  const map = useMap();
-  const done = useRef(false);
-  useEffect(() => {
-    if (center && !done.current) {
-      map.setView(center, 12);
-      done.current = true;
-    }
-  }, [center, map]);
-  return null;
-}
-
-export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
-  const [initialCenter, setInitialCenter] = useState<[number, number] | null>(null);
+  const [initialCenter, setInitialCenter] = useState<{ longitude: number; latitude: number } | null>(null);
   const [communes, setCommunes] = useState<CommuneArea[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [zoom, setZoom] = useState(FRANCE_ZOOM);
   const [loading, setLoading] = useState(false);
   const [selectedRisk, setSelectedRisk] = useState<string | null>(null);
+  const [popupCommune, setPopupCommune] = useState<CommuneArea | null>(null);
 
   useEffect(() => {
     if (!inseeCode) return;
@@ -100,26 +55,21 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
       .then((res) => res.json())
       .then((data) => {
         if (data.center) {
-          setInitialCenter([data.center.lat, data.center.lng]);
+          setInitialCenter({ latitude: data.center.lat, longitude: data.center.lng });
         }
       })
       .catch(() => {});
   }, [inseeCode]);
 
-  const handleBoundsChange = useCallback((bounds: Bounds, currentZoom: number) => {
-    setZoom(currentZoom);
-
-    if (currentZoom < CONTOURS_MIN_ZOOM) {
-      setCommunes([]);
-      setTruncated(false);
-      return;
-    }
-
+  const fetchCommunes = useCallback(() => {
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    const bounds = map.getBounds();
     const params = new URLSearchParams({
-      north: String(bounds.north),
-      south: String(bounds.south),
-      east: String(bounds.east),
-      west: String(bounds.west),
+      north: String(bounds.getNorth()),
+      south: String(bounds.getSouth()),
+      east: String(bounds.getEast()),
+      west: String(bounds.getWest()),
     });
     setLoading(true);
     fetch(`/api/communes/in-bounds?${params}`)
@@ -132,6 +82,15 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
       .finally(() => setLoading(false));
   }, []);
 
+  const handleMoveEnd = useCallback(() => {
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    setZoom(map.getZoom());
+
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(fetchCommunes, MOVE_DEBOUNCE_MS);
+  }, [fetchCommunes]);
+
   const availableRisks = useMemo(() => {
     const map = new Map<string, string>();
     for (const commune of communes) {
@@ -142,108 +101,101 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
     return [...map.entries()].map(([code, label]) => ({ code, label }));
   }, [communes]);
 
-  const selectedStyle = selectedRisk ? getRiskStyle(selectedRisk) : null;
   const showIcons = zoom >= ICONS_MIN_ZOOM;
-  const showContours = zoom >= CONTOURS_MIN_ZOOM;
 
   return (
     <div className="relative h-full w-full">
-      <MapContainer
-        center={initialCenter ?? FRANCE_CENTER}
-        zoom={initialCenter ? 12 : FRANCE_ZOOM}
-        style={{ height: "100%", width: "100%" }}
+      <MapGL
+        ref={mapRef}
+        initialViewState={{
+          longitude: initialCenter?.longitude ?? FRANCE_CENTER.longitude,
+          latitude: initialCenter?.latitude ?? FRANCE_CENTER.latitude,
+          zoom: initialCenter ? 13 : FRANCE_ZOOM,
+        }}
+        mapStyle={BASE_STYLE}
+        maxZoom={MAX_ZOOM}
+        style={{ width: "100%", height: "100%" }}
+        onLoad={(e) => {
+          fetchCommunes();
+          setZoom(e.target.getZoom());
+        }}
+        onMoveEnd={handleMoveEnd}
       >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-
-        <RecenterOnCenter center={initialCenter} />
-        <BoundsWatcher onChange={handleBoundsChange} />
-
-        {showContours &&
-          communes.map((commune) => {
-            if (!commune.contour) return null;
-
-            const isCenter = commune.insee_code === inseeCode;
-            const hasSelectedRisk = selectedRisk
-              ? commune.risks.some((r) => r.code === selectedRisk)
-              : false;
-
-            const feature: Feature = {
-              type: "Feature",
-              geometry: commune.contour,
-              properties: {},
-            };
-
-            return (
-              <GeoJSON
-                key={`${commune.insee_code}-${selectedRisk}`}
-                data={feature}
-                style={{
-                  color: hasSelectedRisk ? selectedStyle!.color : BORDER_COLOR,
-                  fillColor: hasSelectedRisk ? selectedStyle!.color : "transparent",
-                  fillOpacity: hasSelectedRisk ? 0.4 : 0,
-                  weight: isCenter ? 3 : 1,
-                  opacity: isCenter ? 1 : 0.5,
-                }}
-              >
-                <Popup>
-                  <strong>{commune.name}</strong>
-                  {commune.risks.length > 0 ? (
-                    <ul className="mt-1 list-none pl-0">
-                      {commune.risks.map((r) => {
-                        const riskStyle = getRiskStyle(r.code);
-                        return (
-                          <li key={r.code}>
-                            {riskStyle.icon} {r.label}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  ) : (
-                    <p>Aucun risque référencé.</p>
-                  )}
-                </Popup>
-              </GeoJSON>
-            );
-          })}
-
         {showIcons &&
-          communes.flatMap((commune) => {
+          communes.map((commune) => {
             const risksToShow = selectedRisk
               ? commune.risks.filter((r) => r.code === selectedRisk)
               : commune.risks;
+            if (selectedRisk && risksToShow.length === 0) return null;
 
-            return risksToShow.map((risk, i) => {
-              const style = getRiskStyle(risk.code);
-              const offset = (i - (risksToShow.length - 1) / 2) * 0.0025;
-              return (
-                <Marker
-                  key={`${commune.insee_code}-${risk.code}`}
-                  position={[commune.lat, commune.lng + offset]}
-                  icon={riskIcon(style.icon)}
-                >
-                  <Popup>
-                    <strong>{commune.name}</strong>
-                    <p>
-                      {style.icon} {risk.label}
-                    </p>
-                  </Popup>
-                </Marker>
-              );
-            });
+            return (
+              <Marker
+                key={commune.insee_code}
+                longitude={commune.lng}
+                latitude={commune.lat}
+                onClick={(e) => {
+                  e.originalEvent.stopPropagation();
+                  setPopupCommune(commune);
+                }}
+              >
+                <div className="flex cursor-pointer gap-0.5">
+                  {risksToShow.slice(0, 4).map((r) => (
+                    <span
+                      key={r.code}
+                      className="flex h-5 w-5 items-center justify-center rounded-full border border-zinc-300 bg-white text-[11px] shadow-sm"
+                    >
+                      {getRiskStyle(r.code).icon}
+                    </span>
+                  ))}
+                  {risksToShow.length > 4 && (
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full border border-zinc-300 bg-white text-[9px] font-medium shadow-sm">
+                      +{risksToShow.length - 4}
+                    </span>
+                  )}
+                </div>
+              </Marker>
+            );
           })}
-      </MapContainer>
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-[1000] flex flex-col gap-2 p-4">
+        {popupCommune && (
+          <Popup
+            longitude={popupCommune.lng}
+            latitude={popupCommune.lat}
+            onClose={() => setPopupCommune(null)}
+            closeButton
+            closeOnClick={false}
+            offset={20}
+          >
+            <strong>{popupCommune.name}</strong>
+            {popupCommune.risks.length > 0 ? (
+              <ul className="mt-1 list-none pl-0">
+                {popupCommune.risks.map((r) => {
+                  const style = getRiskStyle(r.code);
+                  return (
+                    <li key={r.code}>
+                      {style.icon} {r.label}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p>Aucun risque référencé.</p>
+            )}
+          </Popup>
+        )}
+      </MapGL>
+
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex flex-col gap-2 p-4">
         <div className="pointer-events-auto max-w-md rounded-lg bg-white/95 p-3 text-sm shadow-md backdrop-blur dark:bg-zinc-900/95">
           <p className="font-medium">Carte des risques</p>
           <p className="text-xs text-zinc-500">
             Informative uniquement. Suivez toujours les consignes des
             autorités officielles.
           </p>
-          {!showContours && (
+          <p className="mt-1 font-mono text-xs text-zinc-400">
+            zoom: {zoom.toFixed(2)} (pictos ≥{ICONS_MIN_ZOOM}, max {MAX_ZOOM})
+          </p>
+          {!showIcons && (
             <p className="mt-1 text-xs text-amber-600">
               Zoomez pour afficher le détail des risques par commune.
             </p>
@@ -258,7 +210,7 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
       </div>
 
       {availableRisks.length > 0 && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[1000] flex justify-center p-4">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center p-4">
           <div className="pointer-events-auto flex max-w-full flex-wrap justify-center gap-2 rounded-lg bg-white/95 p-2 shadow-md backdrop-blur dark:bg-zinc-900/95">
             <button
               onClick={() => setSelectedRisk(null)}
