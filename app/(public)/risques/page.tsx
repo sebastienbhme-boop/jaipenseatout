@@ -1,6 +1,14 @@
 import { createClient } from "@/lib/supabase/server";
 import { getRiskStyle } from "../carte/risk-colors";
 
+// Liens externes officiels pour approfondir un risque spécifique.
+const EXTERNAL_LINKS: Record<string, { label: string; url: string }> = {
+  RADON: {
+    label: "Consulter le potentiel radon de ma commune (ASNR)",
+    url: "https://recherche-expertise.asnr.fr/savoir-comprendre/environnement/connaitre-potentiel-radon-ma-commune",
+  },
+};
+
 export default async function RisquesPage() {
   const supabase = await createClient();
   const { data: riskTypes } = await supabase
@@ -20,6 +28,7 @@ export default async function RisquesPage() {
       <ul className="flex flex-col gap-3">
         {(riskTypes ?? []).map((risk) => {
           const style = getRiskStyle(risk.code);
+          const externalLink = EXTERNAL_LINKS[risk.code];
           return (
             <li
               key={risk.code}
@@ -37,6 +46,16 @@ export default async function RisquesPage() {
                   <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
                     {risk.default_content}
                   </p>
+                )}
+                {externalLink && (
+                  <a
+                    href={externalLink.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-block text-sm text-zinc-500 hover:underline dark:text-zinc-400"
+                  >
+                    {externalLink.label} →
+                  </a>
                 )}
               </div>
             </li>
