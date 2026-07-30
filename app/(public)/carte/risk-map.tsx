@@ -10,6 +10,7 @@ import { getRiskStyle } from "./risk-colors";
 const FRANCE_CENTER: [number, number] = [46.6, 2.5];
 const FRANCE_ZOOM = 6;
 const BORDER_COLOR = "#71717a";
+const CONTOURS_MIN_ZOOM = 9; // en dessous, trop de communes : on ne charge pas les contours (évite les gros payloads)
 const ICONS_MIN_ZOOM = 10; // en dessous, trop de communes affichées : les pictos surchargeraient la carte
 const MOVE_DEBOUNCE_MS = 400;
 
@@ -45,7 +46,7 @@ type BoundsResponse = {
 
 type Bounds = { north: number; south: number; east: number; west: number };
 
-function BoundsWatcher({ onChange }: { onChange: (bounds: Bounds) => void }) {
+function BoundsWatcher({ onChange }: { onChange: (bounds: Bounds, zoom: number) => void }) {
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const map = useMapEvents({
@@ -53,33 +54,23 @@ function BoundsWatcher({ onChange }: { onChange: (bounds: Bounds) => void }) {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       timeoutRef.current = setTimeout(() => {
         const b = map.getBounds();
-        onChange({
-          north: b.getNorth(),
-          south: b.getSouth(),
-          east: b.getEast(),
-          west: b.getWest(),
-        });
+        onChange(
+          { north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() },
+          map.getZoom()
+        );
       }, MOVE_DEBOUNCE_MS);
     },
   });
 
   useEffect(() => {
     const b = map.getBounds();
-    onChange({ north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() });
+    onChange(
+      { north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() },
+      map.getZoom()
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return null;
-}
-
-function ZoomWatcher({ onChange }: { onChange: (zoom: number) => void }) {
-  const map = useMapEvents({
-    zoomend: () => onChange(map.getZoom()),
-  });
-  useEffect(() => {
-    onChange(map.getZoom());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
   return null;
 }
 
@@ -100,6 +91,7 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
   const [communes, setCommunes] = useState<CommuneArea[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [zoom, setZoom] = useState(FRANCE_ZOOM);
+  const [loading, setLoading] = useState(false);
   const [selectedRisk, setSelectedRisk] = useState<string | null>(null);
 
   useEffect(() => {
@@ -114,20 +106,30 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
       .catch(() => {});
   }, [inseeCode]);
 
-  const handleBoundsChange = useCallback((bounds: Bounds) => {
+  const handleBoundsChange = useCallback((bounds: Bounds, currentZoom: number) => {
+    setZoom(currentZoom);
+
+    if (currentZoom < CONTOURS_MIN_ZOOM) {
+      setCommunes([]);
+      setTruncated(false);
+      return;
+    }
+
     const params = new URLSearchParams({
       north: String(bounds.north),
       south: String(bounds.south),
       east: String(bounds.east),
       west: String(bounds.west),
     });
+    setLoading(true);
     fetch(`/api/communes/in-bounds?${params}`)
       .then((res) => res.json())
       .then((data: BoundsResponse) => {
         setCommunes(data.communes ?? []);
         setTruncated(data.truncated ?? false);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
 
   const availableRisks = useMemo(() => {
@@ -142,13 +144,14 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
 
   const selectedStyle = selectedRisk ? getRiskStyle(selectedRisk) : null;
   const showIcons = zoom >= ICONS_MIN_ZOOM;
+  const showContours = zoom >= CONTOURS_MIN_ZOOM;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="relative h-full w-full">
       <MapContainer
         center={initialCenter ?? FRANCE_CENTER}
         zoom={initialCenter ? 12 : FRANCE_ZOOM}
-        style={{ height: "500px", width: "100%", borderRadius: "0.5rem" }}
+        style={{ height: "100%", width: "100%" }}
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -157,54 +160,54 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
 
         <RecenterOnCenter center={initialCenter} />
         <BoundsWatcher onChange={handleBoundsChange} />
-        <ZoomWatcher onChange={setZoom} />
 
-        {communes.map((commune) => {
-          if (!commune.contour) return null;
+        {showContours &&
+          communes.map((commune) => {
+            if (!commune.contour) return null;
 
-          const isCenter = commune.insee_code === inseeCode;
-          const hasSelectedRisk = selectedRisk
-            ? commune.risks.some((r) => r.code === selectedRisk)
-            : false;
+            const isCenter = commune.insee_code === inseeCode;
+            const hasSelectedRisk = selectedRisk
+              ? commune.risks.some((r) => r.code === selectedRisk)
+              : false;
 
-          const feature: Feature = {
-            type: "Feature",
-            geometry: commune.contour,
-            properties: {},
-          };
+            const feature: Feature = {
+              type: "Feature",
+              geometry: commune.contour,
+              properties: {},
+            };
 
-          return (
-            <GeoJSON
-              key={`${commune.insee_code}-${selectedRisk}`}
-              data={feature}
-              style={{
-                color: hasSelectedRisk ? selectedStyle!.color : BORDER_COLOR,
-                fillColor: hasSelectedRisk ? selectedStyle!.color : "transparent",
-                fillOpacity: hasSelectedRisk ? 0.4 : 0,
-                weight: isCenter ? 3 : 1,
-                opacity: isCenter ? 1 : 0.5,
-              }}
-            >
-              <Popup>
-                <strong>{commune.name}</strong>
-                {commune.risks.length > 0 ? (
-                  <ul className="mt-1 list-none pl-0">
-                    {commune.risks.map((r) => {
-                      const riskStyle = getRiskStyle(r.code);
-                      return (
-                        <li key={r.code}>
-                          {riskStyle.icon} {r.label}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : (
-                  <p>Aucun risque référencé.</p>
-                )}
-              </Popup>
-            </GeoJSON>
-          );
-        })}
+            return (
+              <GeoJSON
+                key={`${commune.insee_code}-${selectedRisk}`}
+                data={feature}
+                style={{
+                  color: hasSelectedRisk ? selectedStyle!.color : BORDER_COLOR,
+                  fillColor: hasSelectedRisk ? selectedStyle!.color : "transparent",
+                  fillOpacity: hasSelectedRisk ? 0.4 : 0,
+                  weight: isCenter ? 3 : 1,
+                  opacity: isCenter ? 1 : 0.5,
+                }}
+              >
+                <Popup>
+                  <strong>{commune.name}</strong>
+                  {commune.risks.length > 0 ? (
+                    <ul className="mt-1 list-none pl-0">
+                      {commune.risks.map((r) => {
+                        const riskStyle = getRiskStyle(r.code);
+                        return (
+                          <li key={r.code}>
+                            {riskStyle.icon} {r.label}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <p>Aucun risque référencé.</p>
+                  )}
+                </Popup>
+              </GeoJSON>
+            );
+          })}
 
         {showIcons &&
           communes.flatMap((commune) => {
@@ -233,48 +236,60 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
           })}
       </MapContainer>
 
-      {!showIcons && (
-        <p className="text-xs text-zinc-500">
-          Zoomez sur une zone pour afficher le détail des risques par commune.
-        </p>
-      )}
-      {truncated && (
-        <p className="text-xs text-amber-600">
-          Trop de communes dans cette zone — zoomez pour tout afficher.
-        </p>
-      )}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-[1000] flex flex-col gap-2 p-4">
+        <div className="pointer-events-auto max-w-md rounded-lg bg-white/95 p-3 text-sm shadow-md backdrop-blur dark:bg-zinc-900/95">
+          <p className="font-medium">Carte des risques</p>
+          <p className="text-xs text-zinc-500">
+            Informative uniquement. Suivez toujours les consignes des
+            autorités officielles.
+          </p>
+          {!showContours && (
+            <p className="mt-1 text-xs text-amber-600">
+              Zoomez pour afficher le détail des risques par commune.
+            </p>
+          )}
+          {loading && <p className="mt-1 text-xs text-zinc-400">Chargement…</p>}
+          {truncated && (
+            <p className="mt-1 text-xs text-amber-600">
+              Trop de communes dans cette zone — zoomez pour tout afficher.
+            </p>
+          )}
+        </div>
+      </div>
 
       {availableRisks.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => setSelectedRisk(null)}
-            className={`rounded-full border px-3 py-1.5 text-sm transition-colors ${
-              selectedRisk === null
-                ? "border-zinc-900 bg-zinc-900 text-white dark:border-white dark:bg-white dark:text-black"
-                : "border-zinc-300 text-zinc-600 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-400"
-            }`}
-          >
-            Tous les risques
-          </button>
-          {availableRisks.map((r) => {
-            const style = getRiskStyle(r.code);
-            const active = selectedRisk === r.code;
-            return (
-              <button
-                key={r.code}
-                onClick={() => setSelectedRisk(active ? null : r.code)}
-                className="flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors"
-                style={{
-                  borderColor: style.color,
-                  backgroundColor: active ? style.color : "transparent",
-                  color: active ? "white" : style.color,
-                }}
-              >
-                <span>{style.icon}</span>
-                {r.label}
-              </button>
-            );
-          })}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[1000] flex justify-center p-4">
+          <div className="pointer-events-auto flex max-w-full flex-wrap justify-center gap-2 rounded-lg bg-white/95 p-2 shadow-md backdrop-blur dark:bg-zinc-900/95">
+            <button
+              onClick={() => setSelectedRisk(null)}
+              className={`rounded-full border px-3 py-1.5 text-sm transition-colors ${
+                selectedRisk === null
+                  ? "border-zinc-900 bg-zinc-900 text-white dark:border-white dark:bg-white dark:text-black"
+                  : "border-zinc-300 text-zinc-600 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-400"
+              }`}
+            >
+              Tous les risques
+            </button>
+            {availableRisks.map((r) => {
+              const style = getRiskStyle(r.code);
+              const active = selectedRisk === r.code;
+              return (
+                <button
+                  key={r.code}
+                  onClick={() => setSelectedRisk(active ? null : r.code)}
+                  className="flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors"
+                  style={{
+                    borderColor: style.color,
+                    backgroundColor: active ? style.color : "transparent",
+                    color: active ? "white" : style.color,
+                  }}
+                >
+                  <span>{style.icon}</span>
+                  {r.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

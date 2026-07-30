@@ -18,17 +18,8 @@ export default async function CartePage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-16">
-      <h1 className="text-2xl font-semibold mb-4">Carte des risques</h1>
-      <p className="mb-6 text-zinc-600 dark:text-zinc-400">
-        Carte temps réel multi-risques, informative uniquement. Suivez
-        toujours les consignes des autorités officielles (FR-Alert,
-        gendarmerie, mairie, préfecture).
-      </p>
+    <div className="relative" style={{ height: "calc(100dvh - 65px)" }}>
       <RiskMapLoader inseeCode={inseeCode} />
-      <p className="mt-4 text-xs text-zinc-500">
-        Cliquez sur un picto pour filtrer la carte sur ce risque.
-      </p>
     </div>
   );
 }

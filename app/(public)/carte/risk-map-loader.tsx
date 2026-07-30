@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 const RiskMap = dynamic(() => import("./risk-map").then((m) => m.RiskMap), {
   ssr: false,
   loading: () => (
-    <div className="flex h-[500px] w-full items-center justify-center rounded-lg border border-zinc-200 text-zinc-500 dark:border-zinc-800">
+    <div className="flex h-full w-full items-center justify-center text-zinc-500">
       Chargement de la carte…
     </div>
   ),
