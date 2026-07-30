@@ -17,11 +17,27 @@ export default function Home() {
           par personne, fiches réflexes hors-ligne. En complément des
           autorités officielles, jamais à leur place.
         </p>
+
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <Link
+            href="/auth/login"
+            className="flex h-12 items-center justify-center rounded-full bg-foreground px-8 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc]"
+          >
+            Créer mon compte
+          </Link>
+          <Link
+            href="/carte"
+            className="flex h-12 items-center justify-center rounded-full border border-zinc-300 px-8 text-zinc-700 transition-colors hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-300"
+          >
+            Voir la carte des risques
+          </Link>
+        </div>
+
         <Link
-          href="/onboarding"
-          className="flex h-12 items-center justify-center rounded-full bg-foreground px-8 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc]"
+          href="/risques"
+          className="text-sm text-zinc-500 hover:underline"
         >
-          Commencer
+          Comprendre les 18 types de risques →
         </Link>
       </main>
     </div>
