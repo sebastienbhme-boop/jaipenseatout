@@ -225,13 +225,13 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
                   {risksToShow.slice(0, 4).map((r) => (
                     <span
                       key={r.code}
-                      className="flex h-5 w-5 items-center justify-center rounded-full border border-zinc-300 bg-white text-[11px] shadow-sm"
+                      className="flex h-4 w-4 items-center justify-center rounded-full border border-zinc-300 bg-white text-[9px] shadow-sm"
                     >
                       {getRiskStyle(r.code).icon}
                     </span>
                   ))}
                   {risksToShow.length > 4 && (
-                    <span className="flex h-5 w-5 items-center justify-center rounded-full border border-zinc-300 bg-white text-[9px] font-medium shadow-sm">
+                    <span className="flex h-4 w-4 items-center justify-center rounded-full border border-zinc-300 bg-white text-[7px] font-medium shadow-sm">
                       +{risksToShow.length - 4}
                     </span>
                   )}
@@ -270,21 +270,8 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
 
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex flex-col gap-2 p-4">
         <div className="pointer-events-auto max-w-md rounded-lg bg-white/95 p-3 text-sm shadow-md backdrop-blur dark:bg-zinc-900/95">
-          <p className="font-medium">Carte des risques</p>
-          <p className="text-xs text-zinc-500">
-            Informative uniquement. Suivez toujours les consignes des
-            autorités officielles.
-          </p>
-          <p className="mt-1 font-mono text-xs text-zinc-400">
-            zoom: {zoom.toFixed(2)} (pictos ≥{ICONS_MIN_ZOOM}, max {MAX_ZOOM})
-          </p>
-          {!showIcons && (
-            <p className="mt-1 text-xs text-amber-600">
-              Zoomez pour afficher le détail des risques par commune.
-            </p>
-          )}
           {loadProgress && (
-            <div className="mt-2">
+            <div>
               <div className="flex items-center justify-between text-xs text-zinc-400">
                 <span>Chargement des risques…</span>
                 <span className="font-mono tabular-nums">
@@ -301,7 +288,7 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
               </div>
             </div>
           )}
-          <div className="mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-700">
+          <div className={loadProgress ? "mt-2 border-t border-zinc-200 pt-2 dark:border-zinc-700" : ""}>
             <MeteoBanner />
           </div>
         </div>
