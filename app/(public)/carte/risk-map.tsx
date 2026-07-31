@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import MapGL, { Marker, Popup, Source, Layer, type MapRef } from "react-map-gl/maplibre";
+import MapGL, { Source, Layer, type MapRef } from "react-map-gl/maplibre";
 import { setWorkerUrl } from "maplibre-gl";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { getRiskStyle } from "./risk-colors";
+import { getRiskStyle, ALL_RISK_CODES } from "./risk-colors";
 import { MeteoBanner } from "../../meteo-banner";
 
 // Next.js réécrit import.meta.url d'une façon qui casse la résolution
@@ -19,12 +19,33 @@ if (typeof window !== "undefined") {
 const FRANCE_CENTER = { longitude: 2.5, latitude: 46.6 };
 const FRANCE_ZOOM = 5.5;
 const MAX_ZOOM = 13; // pas besoin de zoomer plus près, la carte reste informative à l'échelle communale
-const ICONS_MIN_ZOOM = 10; // en dessous, trop de communes affichées : les pictos surchargeraient la carte
 const MOVE_DEBOUNCE_MS = 400;
 
 const BASE_STYLE = "https://openmaptiles.geo.data.gouv.fr/styles/osm-bright/style.json";
 
+// Couleurs officielles de la vigilance météo France (vert/jaune/orange/rouge).
+const VIGILANCE_COLORS: Record<number, string> = {
+  1: "#4caf50",
+  2: "#ffeb3b",
+  3: "#ff9800",
+  4: "#f44336",
+};
+
 type Risk = { code: string; label: string };
+
+type DepartementOverlay = {
+  code: string;
+  name: string;
+  contour: Geometry;
+  colorId: number;
+};
+
+type OverlayKind = "vigilance" | "meteo-forets";
+
+const OVERLAYS: Record<OverlayKind, { label: string; icon: string; endpoint: string }> = {
+  vigilance: { label: "Vigilance météo", icon: "⛈️", endpoint: "/api/vigilance" },
+  "meteo-forets": { label: "Danger feu de forêt", icon: "🔥", endpoint: "/api/meteo-forets" },
+};
 
 type CommuneArea = {
   insee_code: string;
@@ -51,10 +72,38 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
   const [zoom, setZoom] = useState(FRANCE_ZOOM);
   const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number } | null>(null);
   const [selectedRisk, setSelectedRisk] = useState<string | null>(null);
-  const [popupCommune, setPopupCommune] = useState<CommuneArea | null>(null);
+  const [activeOverlay, setActiveOverlay] = useState<OverlayKind | null>(null);
+  const [overlayLoading, setOverlayLoading] = useState<OverlayKind | null>(null);
+  const overlayCacheRef = useRef<Map<OverlayKind, DepartementOverlay[]>>(new Map());
+  const [overlayData, setOverlayData] = useState<DepartementOverlay[]>([]);
   const [labelledRiskInfo, setLabelledRiskInfo] = useState<{ label: string; top: number } | null>(null);
   const legendRef = useRef<HTMLDivElement>(null);
   const labelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const toggleOverlay = useCallback((kind: OverlayKind) => {
+    setSelectedRisk(null);
+    setActiveOverlay((prev) => {
+      const next = prev === kind ? null : kind;
+      if (next) {
+        const cached = overlayCacheRef.current.get(next);
+        if (cached) {
+          setOverlayData(cached);
+        } else {
+          setOverlayLoading(next);
+          fetch(OVERLAYS[next].endpoint)
+            .then((res) => res.json())
+            .then((data: { departments: DepartementOverlay[] }) => {
+              const departments = data.departments ?? [];
+              overlayCacheRef.current.set(next, departments);
+              setOverlayData(departments);
+            })
+            .catch(() => {})
+            .finally(() => setOverlayLoading(null));
+        }
+      }
+      return next;
+    });
+  }, []);
 
   const showRiskLabel = useCallback((label: string, buttonEl: HTMLElement) => {
     const containerRect = legendRef.current?.getBoundingClientRect();
@@ -145,17 +194,13 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
     timeoutRef.current = setTimeout(fetchDepartementsInBounds, MOVE_DEBOUNCE_MS);
   }, [fetchDepartementsInBounds]);
 
-  const availableRisks = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const commune of communes) {
-      for (const risk of commune.risks) {
-        map.set(risk.code, risk.label);
-      }
-    }
-    return [...map.entries()].map(([code, label]) => ({ code, label }));
-  }, [communes]);
-
-  const showIcons = zoom >= ICONS_MIN_ZOOM;
+  // Légende fixe (tous les risques connus, pas seulement ceux visibles
+  // dans la zone actuelle) : affichée immédiatement, sans attendre le
+  // premier chargement de données.
+  const availableRisks = useMemo(
+    () => ALL_RISK_CODES.map((code) => ({ code, label: getRiskStyle(code).label })),
+    []
+  );
 
   const selectedRiskGeoJson: FeatureCollection | null = useMemo(() => {
     if (!selectedRisk) return null;
@@ -168,6 +213,16 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
       }));
     return { type: "FeatureCollection", features };
   }, [communes, selectedRisk]);
+
+  const overlayGeoJson: FeatureCollection | null = useMemo(() => {
+    if (!activeOverlay || overlayData.length === 0) return null;
+    const features: Feature[] = overlayData.map((d) => ({
+      type: "Feature",
+      geometry: d.contour,
+      properties: { code: d.code, name: d.name, color: VIGILANCE_COLORS[d.colorId] ?? VIGILANCE_COLORS[1] },
+    }));
+    return { type: "FeatureCollection", features };
+  }, [activeOverlay, overlayData]);
 
   const selectedStyle = selectedRisk ? getRiskStyle(selectedRisk) : null;
 
@@ -204,67 +259,19 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
           </Source>
         )}
 
-        {showIcons &&
-          communes.map((commune) => {
-            const risksToShow = selectedRisk
-              ? commune.risks.filter((r) => r.code === selectedRisk)
-              : commune.risks;
-            if (selectedRisk && risksToShow.length === 0) return null;
-
-            return (
-              <Marker
-                key={commune.insee_code}
-                longitude={commune.lng}
-                latitude={commune.lat}
-                onClick={(e) => {
-                  e.originalEvent.stopPropagation();
-                  setPopupCommune(commune);
-                }}
-              >
-                <div className="flex cursor-pointer gap-0.5">
-                  {risksToShow.slice(0, 4).map((r) => (
-                    <span
-                      key={r.code}
-                      className="flex h-4 w-4 items-center justify-center rounded-full border border-zinc-300 bg-white text-[9px] shadow-sm"
-                    >
-                      {getRiskStyle(r.code).icon}
-                    </span>
-                  ))}
-                  {risksToShow.length > 4 && (
-                    <span className="flex h-4 w-4 items-center justify-center rounded-full border border-zinc-300 bg-white text-[7px] font-medium shadow-sm">
-                      +{risksToShow.length - 4}
-                    </span>
-                  )}
-                </div>
-              </Marker>
-            );
-          })}
-
-        {popupCommune && (
-          <Popup
-            longitude={popupCommune.lng}
-            latitude={popupCommune.lat}
-            onClose={() => setPopupCommune(null)}
-            closeButton
-            closeOnClick={false}
-            offset={20}
-          >
-            <strong>{popupCommune.name}</strong>
-            {popupCommune.risks.length > 0 ? (
-              <ul className="mt-1 list-none pl-0">
-                {popupCommune.risks.map((r) => {
-                  const style = getRiskStyle(r.code);
-                  return (
-                    <li key={r.code}>
-                      {style.icon} {r.label}
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : (
-              <p>Aucun risque référencé.</p>
-            )}
-          </Popup>
+        {overlayGeoJson && (
+          <Source id="overlay" type="geojson" data={overlayGeoJson}>
+            <Layer
+              id="overlay-fill"
+              type="fill"
+              paint={{ "fill-color": ["get", "color"], "fill-opacity": 0.45 }}
+            />
+            <Layer
+              id="overlay-outline"
+              type="line"
+              paint={{ "line-color": "#ffffff", "line-width": 1 }}
+            />
+          </Source>
         )}
       </MapGL>
 
@@ -310,6 +317,27 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
             >
               ✳️
             </button>
+            {(Object.entries(OVERLAYS) as [OverlayKind, (typeof OVERLAYS)[OverlayKind]][]).map(
+              ([kind, overlay]) => {
+                const active = activeOverlay === kind;
+                return (
+                  <button
+                    key={kind}
+                    onClick={() => toggleOverlay(kind)}
+                    title={overlay.label}
+                    aria-label={overlay.label}
+                    aria-pressed={active}
+                    className={`flex h-8 w-8 items-center justify-center rounded-md border text-sm transition-colors ${
+                      active
+                        ? "border-zinc-900 bg-zinc-900 text-white dark:border-white dark:bg-white dark:text-black"
+                        : "border-zinc-300 text-zinc-600 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-400"
+                    }`}
+                  >
+                    {overlayLoading === kind ? "…" : overlay.icon}
+                  </button>
+                );
+              }
+            )}
             {availableRisks.map((r) => {
               const style = getRiskStyle(r.code);
               const active = selectedRisk === r.code;
@@ -318,6 +346,7 @@ export function RiskMap({ inseeCode }: { inseeCode: string | null }) {
                   key={r.code}
                   onClick={(e) => {
                     setSelectedRisk(active ? null : r.code);
+                    setActiveOverlay(null);
                     showRiskLabel(r.label, e.currentTarget);
                   }}
                   aria-label={r.label}
